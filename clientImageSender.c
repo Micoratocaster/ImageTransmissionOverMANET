@@ -1,4 +1,4 @@
-/*Time-stamp: <Mon Jan 06 14:46:13 JST 2014>*/
+/*Time-stamp: <Wed Jan 29 11:36:35 JST 2014>*/
 /* coding utf-8 */
 
 /* [TODO]
@@ -66,43 +66,22 @@
  * | シーケンス番号     |          新周期         |
  * | (u_short 2 bytes) |       (float 4 bytes)   |
  * ----------------------------------------------
- *
- * [※]転送方式CONTROL_METHOD_UNICAST_WITH_APPLV_ARQ使用時、
- *         ACK利用する再送制御ARQメカニズムのため、さらに2bytesのシーケンス番号がヘッダとして付与される
- *
+
  
- *++プログラムで使うポートとその用途++++
- *
  *+++使い方++++ 
  *  プログラム中 (sudo) sysctlコマンドを用いています。
- *  一般ユーザ、sudoでパスワード要求されないように、あらかじめ設定してください
- *  (sudoの[パスワード要求なし]のための設定はvisudoで編集してください。わからなければネットで調べてください)
+ *  プログラム実行ユーザがsudoでパスワード要求されないように、あらかじめ設定してください
+ *  (sudoの[パスワード要求なし]のための設定はvisudoで行います)
+ 
  *------------------------------------------------------------------------------------------------------------------
- *              compile          : $ gcc imageSender_multihop.c -lpthread -o imageSender
- *        execute[USING_CAMERA]  : $ ./imageSender (ipaddr) (portnum) 
- *        execute[USING_FILES ]  : $ ./imageSender (ipaddr) (portnum) (absoluted pass of directory holding images)
+ *              compile          : $ gcc clientImageSender.c -lpthread -o clientImageSender
+ *              execute          : $ ./clientImageSender
  *------------------------------------------------------------------------------------------------------------------
 
- *
- *+++実行上での注意++++
- *
- * ※データ転送に関して
- *        #define USING_CAMERAの場合は /dev/video0デバイスがあるかどうかを確認
- *        $ /home/(ユーザ名)/vlc2.0.5/vlc が実行可能
- *        #define USING_FILESの場合は、特定のディレクトリ内に転送する画像ファイル(.jpg or bmp)を用意しておく
- * ※送信バッファオーバーフローへの対処
- *        BMP転送時に混雑が起きていないにもかかわらず、転送成功率が極めて低い場合、送信バッファの
- *        オーバーフローが原因である。そのときは SOCKET_BUFFER_SIZE_IMAGEのサイズを調整する
- *        (このサイズは画像フォーマットとカメラ解像度に依存するので、本プログラム側で最適化することはできない)                        
- *
- *        (根本的には↓のいずれかの方法でバッファサイズを大きくする)
- *              (i)  ファイル # echo XXX > /proc/sys/net/core/wmem_max
- *              (ii) コマンド # sysctl -w net.core.wmem_max=[設定サイズ]
-
- *++補足++
+ *++[未テスト項目]++
  * 
- * MAXIMUM_SEGMENT_SIZEは1400以外でテストしたことないので、変更時にもしかすると不具合が見られるかもしれない
- * 
+ * + MAXIMUM_SEGMENT_SIZEは1400以外でテストしたことないので、変更時に不具合が見られる可能性
+ * + カメラから映像取得し送信はテスト済み。あらかじめ用意したファイルを送信する部分は未テスト
  */
 
 #include "common.h"
@@ -144,8 +123,7 @@ enum {
 
 #define JPG_IMAGE_FORMAT          "jpg"
 
-/* ビーコン受信してから画像データを送るまでの待ち時間（固定値）「実際は固定値＋ランダム数」 */
-#define FIXED_WAIT_TIME (30)
+
 
 /*初期周期広告ブロードキャスト */
 void BroadcastBeacon (struct in_addr ip_image_data_gathering_node, float param);

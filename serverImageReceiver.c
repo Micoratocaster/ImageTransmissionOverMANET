@@ -1,4 +1,4 @@
-/* Time-stamp: <Mon Jan 06 14:51:31 JST 2014> */
+/* Time-stamp: <Thu Feb 06 14:53:06 JST 2014> */
 
 /* TODO */
 /* X1 いろいろきれいにする
@@ -73,33 +73,20 @@
  * | (u_short 2 bytes)   | (u_short 2 bytes) |     (float 4 bytes)  |
  * ---------------------------------------------------------------------
  *
- *
- * (V) Auto Repeat Request (ARQの有無)
- *    初期周期広告と制御メッセージ（以下、両方ともメッセージと呼称）
- *    の送信方法は、以下の３パターンが利用可能である
- *    (i) ブロードキャスト(MACブロードキャストなのでリンク層でのARQなし) CONTROL_METHOD_BROADCAST
- *        各ノードはブロードキャストによって次ホップノードにメッセージを転送する
- *        各ノードはメッセージを受信したら、同じメッセージを再ブロードキャストする
- *    (ii) ユニキャスト(MACでのARQ利用方式)     [CONTROL_METHOD_UNICAST_WITH_ARQ, ACK_RETRY_MAX==0]
- *        各子ノードのユニキャストアドレスにメッセージを送信する
- *    (iii) ユニキャスト with ARQ at APP
- *        (ii)の場合加えて、隣接ノード間でアプリケーションレベル(本プログラム)
- *            でACK再送制御する CONTROL_METHOD_UNICAST_WITH_APPLV_ARQ
- *        タイムアウトをACK_TIMEOUT、最大再送回数をACK_RETRY_MAX(>=1)で規定
- *
- *
  *+++ 使い方 +++
  *----------------------------------------------------------------------------------------------------
- * 全端末画像送信周期制御プログラム(ビーコンによる周期設定機能付き)
- *   機能: imageSenderによって画像ファイルを受信し、受信ログを[port(受信ポート番号).log]と追記する
- *         また、低受信率/高受信率を判断すると画像送信周期制御メッセージを送信。送信周期延長/短縮を行う
- *         
- *        compile : $ gcc serverImageReceiver
+ * 映像収集ノード用プログラム
+ *   機能: 映像ファイルを(BMP)を受信し、ファイルを復元する。common.h のemum内パラメータADAPTIVE設定時に
+ *         映像フレーム送信周期制御を行う
+ *
+ *        make          : make clean; make (common.h変更時はmake cleanする)
+ *        compile(単体) : $ gcc serverImageReceiver
  *                              -lpthread -lrt -o serverImageReceiver
  *
  * 前回受信ログ/jpgファイル削除: $ rm port*; rm [IPaddr] -rf
- *        execute : $ ./serverImageReceiver (name wlan interface: e.g. wlan0)
- *           (initial sending period: e.g. 15.0) (timer of calculate racev ratio: e.g. 30 ( means settting 30 x initial sending period)
+ *        execute : $ ./serverImageReceiver (wlan interface name [e.g.: wlan0])
+ *           (initial sending period [ e.g. 15.0] ) (timer of calculate racev ratio [ e.g.: 30]
+ *                                                     ( means settting 30 x initial sending period)
  *-----------------------------------------------------------------------------------------------------
  */
 
@@ -113,7 +100,7 @@
 /*周期延長判断用 受信率しきい値*/
 #define GAMMA1                 (0.90)
 /*周期短縮判断用 受信率しきい値*/
-#define GAMMA2                 (1.10)
+#define GAMMA2                 (0.95)
 /* 周期延長パラメータ (1+alpha)*current_sending_interval のように設定 */
 #define ALPHA                  (0.1)
 /* 周期短縮パラメータ (1- beta)*current_sending_interval のように設定 */
@@ -127,14 +114,15 @@
 /*#define BEACON_IP          BROADCAST_IP */
 
 
- /* 輻輳検知条件 検知方式 (STATIC_PERIODの受信成功率のログにも反映)*/
+/* 輻輳検知条件 検知方式*/
 enum {
     WHOLE_CONGESTION_DETECT  = 1, /* すべての受信データ量に対してすべての送信データ量*/
     MIN_CONGESTION_DETECT    = 0, /* 各端末ごとに受信データ量/送信データ量を算出、その最小値を取る*/
 };
 
-/*受信されたパケットを挿入する*/
-/*ヘッドに近いほうが新しいデータ(番号大)であり、先頭が古いデータ(番号小)となる。*/
+/* 受信された映像データパケットリスト(フレームではなく、分割したパケット単位) *
+ * ヘッドに近いほうが新しいデータ(sequence番号大)であり、                   *
+ * 先頭が古いデータ(sequence番号小)となる。*/
 struct one_packet_data {
     int            day;   //gettimeofdayの受信時刻(整数部分)
     int            usec;  //上記の小数部分
@@ -938,23 +926,19 @@ void *makeSendValDataListfromTCPpack (void *param) {
 
 
 
-
-
 /*
  * (受信率算出) タイマハンドラによる呼び出しが行われる
  *              受信率算出に使われた項目は領域解放される
  *
- *              [ただしメッセージが受信されない場合に
- *               そのシーケンス範囲外のパケットの領域が解放されない問題があるので あとで直す]
+ *              [TODO 送信データ量通知メッセージが損失によって受信不可能b出会った場合、
+ *               対応するシーケンス範囲のパケットの領域が解放されない問題を直す必要あり]
  */
-//[注意]このルーチン終了時、このルーチン内で確保した領域はすべて解放されていることを確認する
 void CalcDataRecvRate(int signum)
 {
-    static int current_cycle     = 0;   //このプログラムはNUM_CYCLE_FOR_EXIT経過後に終了する
+    static int current_cycle     = 0;   //このプロセスはNUM_CYCLE_FOR_EXIT経過後に終了する
     long long int amount_of_recv = 0;
     long long int amount_of_send = 0;
     long long int actual_recv    = 0;
-    double        recv_rate      = 0.0;
 
     /*パケットのポインタ*/
     //現在の末尾のリストのポインタ；
@@ -964,10 +948,12 @@ void CalcDataRecvRate(int signum)
     u_short                       last_seq;
     /*送信データ量通知メッセージのポインタ*/
     struct send_data_val_mess    *mess_cur, *mess_prev;
-    u_int   list_size = 0;
-    
-    struct in_addr ip_mess, ip_pac;
-    u_short sequence_from, sequence_end, pac_sequence;
+    u_int                         list_size = 0;
+
+    /* 送信データ量通知メッセージの送信元アドレス、対応区間データの送信元アドレス */
+    /* シーケンス番号始まり終わり　データの番号                                 */
+    struct in_addr                ip_mess, ip_pac;
+    u_short                       sequence_from, sequence_end, pac_sequence;
 
     /*受信成功率格納用リストのポインタ*/
     struct recv_data_ratio       *ratio_next, *ratio_prev, *ratio_new;
@@ -976,9 +962,16 @@ void CalcDataRecvRate(int signum)
     int hit_in_ratio = 0;
 
     //最小受信成功率[<=1.0] (2.0はダミー)
-    double min_recv_ratio    = 2.0;
-    int overflow=0;
-    int del=0;             /*項目削除時1に*/
+    double min_recv_ratio     = 1.0;
+    //１クライアントの受信成功率
+    double recv_ratio_pernode = 0.0;
+    //全体受信成功率
+    double whole_recv_ratio   = 1.0;
+    //ネットワーク状態判定用 受信成功率(算出方式に応じてwhole かminのいずれかを格納)
+    double recv_ratio         = 1.0;
+    
+    int overflow   =0;
+    int del        =0;             /*項目削除時1に*/
 
     /* 受信成功率算出時の時刻 */
     struct timeval current_time;
@@ -1152,7 +1145,7 @@ void CalcDataRecvRate(int signum)
             }
             ratio_prev = ratio_next;
         }
-        /*項目作成*/
+        /*ヒットしない -> 項目作成、初期化*/
         if (hit_in_ratio==0) {
             if((ratio_new = (struct recv_data_ratio *)malloc(sizeof(struct recv_data_ratio))) == NULL) {
                 err(EXIT_FAILURE,"memory allocation failure [ratio_new]\n");
@@ -1172,8 +1165,7 @@ void CalcDataRecvRate(int signum)
       
         /* 
          *     (ip_pac == ip_mess かつ sequence_from <= pac_sequence <= sequence_end )
-         *     の条件を満たすパケットサイズを集計する[65525から0にもどった範囲も考慮]]
-         *     アクセスした項目は領域解放する
+         *     の条件を満たすパケットサイズを集計する[65525から0にもどった範囲も考慮する]]
          */
         
         
@@ -1317,69 +1309,64 @@ void CalcDataRecvRate(int signum)
         pthread_mutex_unlock (&send_data_val_mess_list_mutex);
         
                 
-    } //end of 転送データ量通知メッセージ探索、受信成功率算出用データ準備
+    } //end of 送信データ量通知メッセージ探索、受信成功率算出用リスト作成
 
      
     
-    /*画像データ受信成功率算出(転送データ量メッセージが受信できた場合のみ、制御する)*/
+    /*画像データ受信成功率算出(転送データ量メッセージが受信できた場合のみ、 *
+     * 算出を行い必要であればデータレート制御メッセージを送るする)          */
     if (amount_of_send > 0) { //この[条件式]=[転送データ量通知メッセージが来ている] とする
-        //recv_rate  = (double)amount_of_recv/amount_of_send;
+
         printf("[Recv rate calculation]-----------------------------------------\n");
 
-        if (MIN_CONGESTION_DETECT) {/*検知条件:最小値*/
-            /*受信成功率リストからそれぞれ受信成功率を算出、最小値格納*/
+        if (MIN_CONGESTION_DETECT) {/*検知条件:ノード別受信成功率の最小値*/
             ratio_prev = &Recv_Data_Ratio_Head;      
             for (ratio_next = Recv_Data_Ratio_Head.next; ratio_next != NULL;) {
                 if(ratio_next->amount_send>0) {
-                    recv_rate  = (double)ratio_next->amount_recv/ratio_next->amount_send;
-	  
-                    printf("(ipaddr) %s recv_ratio %lf(send %lld recv %lld)\n"
-                           ,inet_ntoa(ratio_next->ip_src)
-                           ,recv_rate
-                           ,ratio_next->amount_send
-                           ,ratio_next->amount_recv);
-                    if (min_recv_ratio > recv_rate) { //初期値 or 新たに最小値を算出
-                        min_recv_ratio = recv_rate;
+                    recv_ratio_pernode  = (double)ratio_next->amount_recv/ratio_next->amount_send;
+                    
+                    if ( min_recv_ratio > recv_ratio_pernode ) { //初期値 or 新たに最小値を算出
+                        min_recv_ratio = recv_ratio_pernode;
                     }
                     ratio_prev = ratio_next;
-	  
-                    ratio_next->amount_recv = ratio_next->amount_send = 0.0;
                 }
-                /*項目削除*/
+                
+                ratio_prev = ratio_next;
                 ratio_next = ratio_next->next;
-                free(ratio_prev->next);
-                ratio_prev->next= ratio_next;
+                //free(ratio_prev->next);
+                //ratio_prev->next= ratio_next;
             }
+            recv_ratio = min_recv_ratio;
+            
         } else if ( WHOLE_CONGESTION_DETECT) { /*検知条件:全体*/
-            min_recv_ratio = (double)amount_of_recv/amount_of_send;
-            ratio_prev = &Recv_Data_Ratio_Head;      
-            for (ratio_next = Recv_Data_Ratio_Head.next; ratio_next != NULL;) {
-                /*項目削除*/
-                ratio_next = ratio_next->next;
-                free(ratio_prev->next);
-                ratio_prev->next= ratio_next;
-            }
+            recv_ratio = (double)amount_of_recv/amount_of_send;
+
+            /* ratio_prev = &Recv_Data_Ratio_Head;       */
+            /* for (ratio_next = Recv_Data_Ratio_Head.next; ratio_next != NULL;) { */
+            /*     /\*項目削除*\/ */
+            /*     ratio_next = ratio_next->next; */
+            /*     free(ratio_prev->next); */
+            /*     ratio_prev->next= ratio_next; */
+            /* } */
         }
 
-        if (ADAPTIVE_PERIOD) { /*可変周期設定方式*/
-            if ( min_recv_ratio < GAMMA1) {
+        if (ADAPTIVE_PERIOD) { /*フレーム送信周期制御方式の適用*/
+            if ( recv_ratio < GAMMA1) {
                 SendingInterval = (1+ALPHA)*SendingInterval;
                 SendingPeriodControl (SendingInterval);
-                message_interval_makes_long  = 1;
+                message_interval_makes_long  = 1; /* 周期延長フラグ */
                 message_interval_makes_short = 0;
 	    
-            } else if ( min_recv_ratio > GAMMA2) {
+            } else if ( recv_ratio > GAMMA2) {
                 SendingInterval = (1- BETA)*SendingInterval;
                 SendingPeriodControl (SendingInterval);
                 message_interval_makes_long  = 0;
-                message_interval_makes_short = 1;
-
+                message_interval_makes_short = 1; /* 周期短縮フラグ */
             }
         }
-    }else {
-        //        printf("...(any data is not received)\n");
-        //デフォルト値2.0なので0にする
-        min_recv_ratio = 0.0;
+    }else {  /* メッセージが受信されなかった場合、周期制御を行わない */
+        //デフォルト値1.0なので0にする
+        recv_ratio = 0.0;
     
     }
     
@@ -1402,28 +1389,44 @@ void CalcDataRecvRate(int signum)
     day   = (int)current_time.tv_sec;
     usec  = (int)current_time.tv_usec;
 
-    /* printf("[CalcDataRecvRate] st 6 before making log\n"); */
-            
     printf("[RECV RATIO %.5lf (in message %lld, amount of recv %lld)\n"
-           ,min_recv_ratio,amount_of_send,amount_of_recv);
+           ,recv_ratio,amount_of_send,amount_of_recv);
     fprintf(fp,
-            "%d.%06d,recv_ratio,%lf,in message,%lld,amount of recv,%lld,sendingPeriod,%lf,congestion,%u,congestion_resolution,%u\n",
+            "%d.%06d,recv_r,%lf,total_send(message),%lld,total_recv,%lld,frame_sending_period,%lf,CD,%u,CR,%u,",
             day,
             usec,
-            min_recv_ratio,
+            recv_ratio,
             amount_of_send,
             amount_of_recv,
             SendingInterval,
             message_interval_makes_long,
             message_interval_makes_short);
-    fclose(fp);
+    
 
+    /* 受信成功率算出用リスト削除 */
+    ratio_prev = &Recv_Data_Ratio_Head;      
+    for (ratio_next = Recv_Data_Ratio_Head.next; ratio_next != NULL; ) {
+        recv_ratio_pernode  = (double)ratio_next->amount_recv/ratio_next->amount_send;
+        fprintf(fp,
+                "(ip),%s,(rr),%lf,send,%lld,recv,%lld,"
+                ,inet_ntoa(ratio_next->ip_src)
+                ,recv_ratio_pernode
+                ,ratio_next->amount_send
+                ,ratio_next->amount_recv);
+        /*項目削除*/
+        ratio_next = ratio_next->next;
+        free(ratio_prev->next);
+        ratio_prev->next= ratio_next;
+    }
+    fprintf(fp,"\n");
+
+    fclose(fp);
     //この関数の呼び出し回数がNUM_CYCLE_FOR_EXIT回経過後、終了コードが送信され、クライアントはすべて終了する
     current_cycle++;
     if ( current_cycle == NUM_CYCLE_FOR_EXIT) {
         printf("[This program exit and EXIT_SUC will broadcast]\n");
-        SendingExitCode(1); //終了コードのブロードキャスト
-        sleep(20);
+        SendingExitCode(1); //終了コードの送信
+        sleep(60);
         exit(0);
     }
 
@@ -1560,7 +1563,7 @@ void SendingExitCode (int code) {
     
 }
 /* 上の関数とほぼ同じ機能(シグナルハンドラとタイマの設定はここでのみ行っている)なので
- * 統合したい。応急処置的に定義した*/
+ * 統合したい*/
 void SendingBeacon (char *dev_for_communication, float param) {
     
     int i,j,n,sw,fs;
@@ -1575,8 +1578,10 @@ void SendingBeacon (char *dev_for_communication, float param) {
     float field1;
     int True = 1;
     int isValid;
-    /* sending interval*/
+    /* 受信成功率算出間隔（タイマハンドラ呼び出し周期）*/
+    double interval_int_initial, interval_frac_initial;
     double interval_int, interval_frac;
+    
     struct sendingPacketInfo sPInfo;
     /*受信率算出タイマ設定 開始*/
     
@@ -1590,11 +1595,14 @@ void SendingBeacon (char *dev_for_communication, float param) {
         err (EXIT_FAILURE, "sigaction()");
       
     } 
+    /* 初回のみクライアント側のビーコン受信後の待機時間を加算してタイマハンドラを設定 */
+    interval_frac_initial
+        = modf(NumImages*SendingInterval+FIXED_WAIT_TIME, &interval_int_initial);
+    interval_frac
+        = modf(NumImages*SendingInterval, &interval_int);
     
-    interval_frac = modf(NumImages*SendingInterval, &interval_int);
-    
-    itval.it_value.tv_sec      = interval_int;  
-    itval.it_value.tv_nsec     = interval_frac*1000000000; 
+    itval.it_value.tv_sec      = interval_int_initial;  
+    itval.it_value.tv_nsec     = interval_frac_initial*1000000000; 
     itval.it_interval.tv_sec   = interval_int;
     itval.it_interval.tv_nsec  = interval_frac*1000000000; 
     printf("[Setting timer for calculating ratio of data value succesary received] %.5lf second.\n"

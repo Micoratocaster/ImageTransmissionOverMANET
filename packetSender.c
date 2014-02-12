@@ -1,4 +1,4 @@
-/*Time-stamp: <Wed Jan 15 10:02:53 JST 2014>*/
+/*Time-stamp: <Wed Feb 12 09:06:46 JST 2014>*/
 
 /*[TODO]
  * X1 RTOを適応的に変化させる（RFC793）
@@ -18,16 +18,7 @@
 /*1ホップ隣接親ノードを記録sするファィル*/
 #define ONEHOP_PARENT                "onehop_parent.dat"
 
-/* 再送時のパラメータ */
-/* RFC 793、TCP(linux)の実装を参考に、以下のパラメータを設定する */
-/* #define ARQ_ALPHA     () */
-/* #define ARQ_BETA      () */
-/* /\* SRTT初期値 *\/ */
-/* #define ARQ_SRTT_INIT () */
-/* /\* Upper bound *\/ */
-/* #define ARQ_UBOUND    () */
-/* /\* Lower bound *\/ */
-/* #define ARQ_LBOUND    () */
+/
 /* RTOの最大値 */
 #define ARQ_UBOUND    (60.0)
 
@@ -447,7 +438,7 @@ static void *sendWaitAndResend (void *param) {
     } while (sig_status != signal_end_of_send);
 
     
-    /* もしも条件に[再送回数 >= 再送上限]を付加する場合、ACKを返す条件を[無条件]にする修正が必要 */
+    /* もしも条件に[再送回数 >= 再送上限]を付加する場合、ACKを返す条件を[無条件]にする修正が必要-> */
     /* 送信成功シグナルを後続のスレッドに送信する */
     
     pthread_mutex_lock(tx_packet->queueMutex);
@@ -2031,9 +2022,9 @@ int  SendingACKorNACK (u_short typeACK, struct in_addr destIP,
         /* 条件としては、この例外となる確率は低いが確率0ではない。
          * RTOの上限値(極度に大きい値を設定しない)と[X*window size]の[X]を大きくすることで0に近づけることはできる */
         /* 期待シーケンス番号がU_SHRTMAX付近で、受信パケットがオーバーフロー後の0番以降であるとき、ACKを返さない */
-        if(diffSeq >= (USHRT_MAX-200*WINDOW_SIZE)) {
+        if(diffSeq >= (USHRT_MAX-2*WINDOW_SIZE)) {
             diffSeq-=USHRT_MAX;
-        } else if (diffSeq <=(-1*USHRT_MAX+200*WINDOW_SIZE)) { /* U_SHTMAXからオーバーフローして0に戻る場合、65535以下はまだACK転送が完了していない可能性がある */
+        } else if (diffSeq <=(-1*USHRT_MAX+2*WINDOW_SIZE)) { /* U_SHTMAXからオーバーフローして0に戻る場合、65535以下はまだACK転送が完了していない可能性がある */
             diffSeq+=USHRT_MAX;
         }
             
